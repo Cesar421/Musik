@@ -33,8 +33,8 @@ PRESETS = {
     "quena":    dict(nota="Sol", oct=4, dia=18.0, pared=3.0,
                      holes=[8, 7, 7.5, 8, 7.5, 8], material="Bambú / caña",
                      trasero=True, dia_tras=5.5),
-    "pincuyo":  dict(nota="Re", oct=5, dia=16.0, pared=2.0,
-                     holes=[5.5, 6, 6, 6, 6, 5.5], material="Bambú / caña",
+    "pincuyo":  dict(nota="Re", oct=5, dia=18.0, pared=3.0,
+                     holes=[12, 13, 13, 9, 12.5, 11.5], material="Bambú / caña",
                      trasero=False, dia_tras=5.0),
     "traversa": dict(nota="Re", oct=4, dia=19.0, pared=3.0,
                      holes=[6, 6.5, 7, 7, 6.5, 6], material="Madera dura",
@@ -80,10 +80,12 @@ def embocadura_specs(instrumento, D):
     if instrumento == "pincuyo":
         return [
             ("Tipo", "Pico con canal de aire (fipple) y tapón, como una flauta dulce"),
-            ("Tapón / block", f"Largo ≈ {1.5 * D:.0f} mm, ajustado al tubo, con cara plana"),
-            ("Canal de aire (windway)", "Alto 0,8–1,2 mm, recto, liso y uniforme"),
-            ("Ventana (boca)", f"Ancho ≈ {0.7 * D:.1f} mm × largo ≈ {0.9 * D:.1f} mm"),
-            ("Labio (labium)", "Bisel afilado ≈ 15°, alineado con el canal de aire"),
+            ("Ventana (cuadrado)", "≈ 8 mm de ancho, a ≈ 20 mm del extremo soplado"),
+            ("Largo del bisel/labio", "≈ 10 mm"),
+            ("Ancho del bisel", "≈ 8 mm"),
+            ("Pendiente del bisel", "≈ 4 mm × 2 mm (rampa hacia el filo)"),
+            ("Canal de aire (windway)", "Recto, liso y uniforme; alto ~1 mm"),
+            ("Tapón / block", "Ajustado al tubo, cara plana hacia la ventana"),
         ]
     if instrumento == "traversa":
         return [
@@ -113,20 +115,92 @@ def frecuencia(midi_num):
 
 
 # ---------------------------------------------------------------------------
-# CALIBRACIÓN EMPÍRICA
+# CALIBRACIÓN EMPÍRICA  (medida sobre instrumentos reales que afinan bien)
 # ---------------------------------------------------------------------------
 # El modelo teórico de medio tubo (L = v/2f) sobreestima la longitud de las
 # flautas de muesca/bisel: el aire "ve" un tubo más largo que el físico.
-# Estos factores se obtuvieron midiendo una QUENA REAL que afina bien:
-#   Sol4, Ø20 mm, pared 4 mm, largo 37.4 cm,
-#   agujeros (boca->punta): 18.4 / 21.3 / 24.4 / 27.7 / 29.4 / 33.4 cm,
-#   pulgar 15.9 cm.
-# El factor = posición_real / posición_teórica_ideal (v/2f).
-# Aplicar este factor hace que el modelo reproduzca medidas reales y escale
-# a otras afinaciones de forma proporcional.
-CAL_LARGO = 0.844        # largo físico / largo acústico ideal
-CAL_AGUJERO = 0.823      # posición real de agujeros frontales / ideal
-CAL_PULGAR = 0.718       # posición real del agujero de pulgar / ideal
+# Estos perfiles se obtuvieron midiendo instrumentos reales:
+#
+#  QUENA real en Sol4, Ø20, pared 4, largo 37.4 cm, pulgar 15.9 cm,
+#    agujeros (boca->punta): 18.4/21.3/24.4/27.7/29.4/33.4 cm.
+#    Convención: TODO TAPADO = tónica (Sol); los 6 agujeros = grados 2..7.
+#
+#  PINCUYO real en Re, sin trasero, largo 28.6 cm,
+#    agujeros (boca->punta): 14.8(Si) 16.8(La) 18.9(Sol) 20.9(Fa#)
+#                            22.8(Mi) 25.3(Re).
+#    Convención: cada agujero ES una nota; los 6 agujeros = grados 1..6
+#    (Re..Si). Todos abiertos = grado 7 (Do#). La tónica (Re) es el agujero
+#    del pie; "todo tapado" da una nota más grave (poco usada).
+#
+# factor = posición_real / posición_acústica_ideal (v/2f).
+CALIBRACION = {
+    "quena": dict(
+        factor_largo=0.844, factor_agujero=0.823, factor_pulgar=0.718,
+        grados=[2, 3, 4, 5, 6, 7],   # los 6 agujeros frontales
+        tonica_tapada=True,          # todo tapado = tónica
+    ),
+    "pincuyo": dict(
+        factor_largo=0.967, factor_agujero=0.860, factor_pulgar=0.720,
+        grados=[1, 2, 3, 4, 5, 6],   # cada agujero es una nota (Re..Si)
+        tonica_tapada=False,         # la tónica es un agujero (el del pie)
+    ),
+    # traversa: sin perfil real medido aún -> usa modelo teórico
+}
+
+
+def digitaciones(d):
+    """Devuelve la tabla de digitación a partir de un diseño calculado.
+
+    Cada entrada: (nota, [estados de los 6 frontales boca->punta], pulgar_tapado).
+    Estado: True = tapado (●), False = abierto (○).
+    Regla de venteo progresivo: para sonar una nota se abre su agujero y todos
+    los que están hacia el pie; los de hacia la boca quedan tapados. El pulgar
+    va tapado en el primer registro y se abre para la octava aguda.
+    """
+    frontales = [a for a in d["agujeros"] if not a.get("trasero")]  # boca->punta
+    n = len(frontales)
+    # nombre de la tónica sin el número de octava (p.ej. "Sol4" -> "Sol")
+    base = d["nota_base"]
+    while base and base[-1].isdigit():
+        base = base[:-1]
+
+    filas = []
+    if d.get("tonica_tapada", True):
+        # convención quena: TODO TAPADO = tónica
+        filas.append((base, [True] * n, True))
+        for idx in range(n - 1, -1, -1):
+            estados = [True] * n
+            for j in range(idx, n):
+                estados[j] = False
+            filas.append((frontales[idx]["nombre"], estados, True))
+        # octava de la tónica: todos los frontales abiertos, pulgar abierto
+        filas.append((base + "´", [False] * n, False))
+    else:
+        # convención pincuyo: cada agujero es una nota. La tónica es el agujero
+        # del pie; para sonarla se tapan todos menos ese (queda abierto).
+        for idx in range(n - 1, -1, -1):
+            estados = [True] * n
+            for j in range(idx, n):
+                estados[j] = False
+            filas.append((frontales[idx]["nombre"], estados, True))
+        # todos abiertos = grado 7 (la nota más aguda de la escala)
+        sietes = frecuencia(0)  # placeholder, recalculamos abajo
+        # nombre del grado 7: una nota por encima del agujero más cercano a la boca
+        nombre7 = NOTAS_ES[(_midi_de_nombre(frontales[0]["nombre"]) + _paso_escala(d)) % 12]
+        filas.append((nombre7, [False] * n, True))
+        # octava de la tónica (sobresoplando)
+        filas.append((base + "´", [False] * n, False))
+    return filas
+
+
+def _midi_de_nombre(nombre):
+    return NOTAS_ES.index(nombre)
+
+
+def _paso_escala(d):
+    # semitonos entre el grado 6 y el 7 según la escala
+    off = ESCALAS[d["escala"]]
+    return off[6] - off[5]
 
 
 def calcular_diseno(instrumento, nota, octava, escala,
@@ -151,30 +225,41 @@ def calcular_diseno(instrumento, nota, octava, escala,
     base_midi = 12 * (octava + 1) + base_idx
     f_base = frecuencia(base_midi)
 
+    perfil = CALIBRACION.get(instrumento)
+    usar_cal = bool(calibrado and perfil)
+
     L_ac = v / (2.0 * f_base)
     d_extremo = 0.613 * R
     d_emb = EMBOCADURA[instrumento] * R
-    if calibrado and instrumento == "quena":
-        # longitud calibrada con quena real (factor empírico)
-        L_fis = L_ac * CAL_LARGO
+    if usar_cal:
+        L_fis = L_ac * perfil["factor_largo"]
     else:
         L_fis = L_ac - d_emb - d_extremo
 
     def posicion(midi_num, d_mm, es_trasero=False):
         """Posición física (m) del centro de un agujero desde el Punto 0."""
         f = frecuencia(midi_num)
-        if calibrado and instrumento == "quena":
-            # posición calibrada: fracción empírica de la longitud ideal v/2f
-            factor = CAL_PULGAR if es_trasero else CAL_AGUJERO
+        if usar_cal:
+            factor = perfil["factor_pulgar"] if es_trasero else perfil["factor_agujero"]
             return f, (v / (2.0 * f)) * factor
         r = (d_mm / 1000.0) / 2.0
         t_ef = t + 1.5 * r
         C_h = t_ef * ((R / r) ** 2)
         return f, v / (2.0 * f) - C_h
 
-    # Agujeros frontales en ORDEN FÍSICO (boca -> punta): grados de la escala
-    # ordenados de la nota más aguda a la más grave.
-    front_offsets = sorted(ESCALAS[escala][1:], reverse=True)  # p.ej. [11,9,7,5,4,2]
+    # Grados de la escala que llevan agujero frontal.
+    # Calibrado: según el perfil real del instrumento.
+    # Teórico: grados 2..7 (tónica = todo tapado).
+    if usar_cal:
+        grados = perfil["grados"]
+    else:
+        grados = [2, 3, 4, 5, 6, 7]
+    # offset en semitonos para cada grado (grado 1 = tónica = 0 semitonos)
+    def offset_grado(g):
+        escala_off = ESCALAS[escala]
+        return escala_off[(g - 1) % 7] + 12 * ((g - 1) // 7)
+    # ordenar de la nota más aguda (cerca de la boca) a la más grave (al pie)
+    front_offsets = sorted((offset_grado(g) for g in grados), reverse=True)
 
     spec = []  # (etiqueta, midi, diametro, es_trasero)
     if trasero:
@@ -223,8 +308,9 @@ def calcular_diseno(instrumento, nota, octava, escala,
         largo_cm=L_fis * 100.0,
         tapon_cm=(d_emb * 100.0) if instrumento != "quena" else 0.0,
         agujeros=agujeros, avisos=avisos, trasero=trasero,
-        modelo=("Calibrado (quena real)" if (calibrado and instrumento == "quena")
+        modelo=("Calibrado (instrumento real)" if usar_cal
                 else "Teórico (Benade)"),
+        tonica_tapada=(perfil["tonica_tapada"] if usar_cal else True),
         material=material,
         material_nota=MATERIALES.get(material, ((0, 0), ""))[1],
         pared_sugerida=(pared_min, pared_max),
@@ -263,6 +349,13 @@ def plano_texto(d):
     s += "\nEMBOCADURA\n" + "-" * 64 + "\n"
     for etq, val in d["embocadura"]:
         s += f"  {etq}: {val}\n"
+
+    s += "\nDIGITACIÓN  (● tapado · ○ abierto · orden boca->punta · P=pulgar)\n"
+    s += "-" * 64 + "\n"
+    for nota, estados, pulgar in digitaciones(d):
+        simbolos = "".join("●" if t else "○" for t in estados)
+        p_simb = (" P:" + ("●" if pulgar else "○")) if d["trasero"] else ""
+        s += f"  {nota:<6} {simbolos}{p_simb}\n"
     s += "=" * 64 + "\n"
     return s
 
@@ -471,12 +564,33 @@ class App(tk.Tk):
         nb.pack(fill="both", expand=True)
 
         tab_dis = tk.Frame(nb, bg=COL["paper"])
+        tab_dig = tk.Frame(nb, bg=COL["paper"])
         tab_fab = tk.Frame(nb, bg=COL["paper"])
         nb.add(tab_dis, text="  Diseño  ")
+        nb.add(tab_dig, text="  Digitación  ")
         nb.add(tab_fab, text="  Fabricación  ")
 
         self._tab_diseno(tab_dis)
+        self._tab_digitacion(tab_dig)
         self._tab_fabricacion(tab_fab)
+
+    def _tab_digitacion(self, p):
+        card = tk.Frame(p, bg=COL["card"], highlightbackground=COL["line"],
+                        highlightthickness=1)
+        card.pack(fill="both", expand=True, pady=(8, 8))
+        self._titulo_panel(card, "TABLA DE DIGITACIÓN")
+        self.lbl_dig_sub = tk.Label(card, text="", font=("Georgia", 11, "italic"),
+                                    bg=COL["card"], fg=COL["soft"])
+        self.lbl_dig_sub.pack(anchor="w", padx=14)
+        self.canvas_dig = tk.Canvas(card, bg=COL["card"], height=300,
+                                    highlightthickness=0)
+        self.canvas_dig.pack(fill="both", expand=True, padx=10, pady=(6, 6))
+        self.canvas_dig.bind("<Configure>", lambda *_: self._dibujar_digitacion())
+        tk.Label(card, text="● tapado    ○ abierto    (arriba = agujero junto a la "
+                 "boca · P = pulgar trasero) · la última columna es la octava aguda "
+                 "(todo abierto + soplo más fuerte)", font=("Georgia", 9, "italic"),
+                 bg=COL["card"], fg=COL["soft"], wraplength=560,
+                 justify="left").pack(anchor="w", padx=14, pady=(0, 8))
 
     def _tab_diseno(self, p):
         # tarjeta resumen
@@ -661,6 +775,7 @@ class App(tk.Tk):
 
         self._dibujar()
         self._actualizar_fabricacion(d)
+        self._dibujar_digitacion()
 
     def _actualizar_fabricacion(self, d):
         # embocadura
@@ -798,6 +913,63 @@ class App(tk.Tk):
                 c.create_text(tx, ry + 14, text=str(cm_mark),
                              fill=COL["soft"], font=("Consolas", 7))
             cm_mark += 5
+
+    def _dibujar_digitacion(self):
+        c = getattr(self, "canvas_dig", None)
+        if c is None:
+            return
+        c.delete("all")
+        d = self.ultimo
+        if not d:
+            return
+        filas = digitaciones(d)
+        self.lbl_dig_sub.config(
+            text=f"{d['instrumento'].capitalize()} en {d['nota_base']} {d['escala']}")
+
+        W = max(c.winfo_width(), 480)
+        H = max(c.winfo_height(), 240)
+        cols = len(filas)
+        margen = 24
+        cw = (W - margen * 2) / cols          # ancho por columna
+        # geometría de cada quena dibujada
+        tubo_w = min(cw * 0.42, 34)
+        top = 30
+        bot = H - 56
+        alto = bot - top
+        n_holes = len(filas[0][1])
+        r = min(tubo_w * 0.26, (alto / (n_holes + 3)) * 0.4, 9)
+
+        for ci, (nota, estados, pulgar_tapado) in enumerate(filas):
+            cx = margen + cw * ci + cw / 2
+            x0 = cx - tubo_w / 2
+            x1 = cx + tubo_w / 2
+            es_octava = nota.endswith("´")
+            # cuerpo (la octava se resalta con borde tierra)
+            c.create_rectangle(x0, top, x1, bot, fill=COL["tube"],
+                               outline=(COL["terra"] if es_octava else COL["ink"]),
+                               width=(2 if es_octava else 1.5))
+            # muesca (boca) arriba
+            c.create_arc(x0 + 3, top - 6, x1 - 3, top + 10, start=0, extent=180,
+                        fill=COL["card"], outline=COL["ink"], width=1)
+            # agujeros frontales: el [0] es el de la boca (arriba)
+            paso = alto / (n_holes + 2)
+            for hi, tapado in enumerate(estados):
+                hy = top + paso * (hi + 1.4)
+                fill = COL["ink"] if tapado else COL["card"]
+                c.create_oval(cx - r, hy - r, cx + r, hy + r,
+                             fill=fill, outline=COL["ink"], width=1.4)
+            # pulgar (P) abajo del tubo, si el instrumento lo tiene
+            if d["trasero"]:
+                py = bot + 10
+                fill = COL["terra"] if pulgar_tapado else COL["card"]
+                c.create_oval(cx - r, py - r, cx + r, py + r,
+                             fill=fill, outline=COL["terra_d"], width=1.4)
+                c.create_text(cx + r + 8, py, text="P", anchor="w",
+                             fill=COL["terra_d"], font=("Consolas", 7))
+            # nombre de la nota
+            c.create_text(cx, bot + 32, text=nota,
+                         fill=(COL["terra"] if es_octava else COL["teal"]),
+                         font=("Georgia", 12, "bold"))
 
     def _guardar(self):
         if not self.ultimo:
