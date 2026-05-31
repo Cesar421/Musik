@@ -112,15 +112,35 @@ def frecuencia(midi_num):
     return 440.0 * (2.0 ** ((midi_num - 69) / 12.0))
 
 
+# ---------------------------------------------------------------------------
+# CALIBRACIÓN EMPÍRICA
+# ---------------------------------------------------------------------------
+# El modelo teórico de medio tubo (L = v/2f) sobreestima la longitud de las
+# flautas de muesca/bisel: el aire "ve" un tubo más largo que el físico.
+# Estos factores se obtuvieron midiendo una QUENA REAL que afina bien:
+#   Sol4, Ø20 mm, pared 4 mm, largo 37.4 cm,
+#   agujeros (boca->punta): 18.4 / 21.3 / 24.4 / 27.7 / 29.4 / 33.4 cm,
+#   pulgar 15.9 cm.
+# El factor = posición_real / posición_teórica_ideal (v/2f).
+# Aplicar este factor hace que el modelo reproduzca medidas reales y escale
+# a otras afinaciones de forma proporcional.
+CAL_LARGO = 0.844        # largo físico / largo acústico ideal
+CAL_AGUJERO = 0.823      # posición real de agujeros frontales / ideal
+CAL_PULGAR = 0.718       # posición real del agujero de pulgar / ideal
+
+
 def calcular_diseno(instrumento, nota, octava, escala,
                     dia_interno, espesor_pared, diametros, temp_c,
-                    material="Bambú / caña", trasero=False, dia_trasero=5.5):
+                    material="Bambú / caña", trasero=False, dia_trasero=5.5,
+                    calibrado=True):
     """Devuelve un dict con toda la geometría del instrumento.
 
     `diametros` son los 6 Ø de los agujeros FRONTALES en orden físico:
     el [0] es el más cercano a la boca (nota más aguda) y el [5] el más
     lejano (nota más grave sobre la base).
     `trasero` activa el agujero del pulgar (octava), más cercano a la boca.
+    `calibrado=True` usa los factores empíricos de una quena real (recomendado);
+    `False` usa el modelo teórico puro (tiende a salir largo).
     """
     instrumento = instrumento.lower()
     v = velocidad_sonido(temp_c)
@@ -134,11 +154,19 @@ def calcular_diseno(instrumento, nota, octava, escala,
     L_ac = v / (2.0 * f_base)
     d_extremo = 0.613 * R
     d_emb = EMBOCADURA[instrumento] * R
-    L_fis = L_ac - d_emb - d_extremo
+    if calibrado and instrumento == "quena":
+        # longitud calibrada con quena real (factor empírico)
+        L_fis = L_ac * CAL_LARGO
+    else:
+        L_fis = L_ac - d_emb - d_extremo
 
-    def posicion(midi_num, d_mm):
+    def posicion(midi_num, d_mm, es_trasero=False):
         """Posición física (m) del centro de un agujero desde el Punto 0."""
         f = frecuencia(midi_num)
+        if calibrado and instrumento == "quena":
+            # posición calibrada: fracción empírica de la longitud ideal v/2f
+            factor = CAL_PULGAR if es_trasero else CAL_AGUJERO
+            return f, (v / (2.0 * f)) * factor
         r = (d_mm / 1000.0) / 2.0
         t_ef = t + 1.5 * r
         C_h = t_ef * ((R / r) ** 2)
@@ -158,7 +186,7 @@ def calcular_diseno(instrumento, nota, octava, escala,
     # calcular posiciones y ordenar por distancia a la boca
     calc = []
     for etq, m, d, tras in spec:
-        f, pos = posicion(m, d)
+        f, pos = posicion(m, d, tras)
         calc.append((etq, m, f, d, pos, tras))
     calc.sort(key=lambda x: x[4])
 
@@ -195,6 +223,8 @@ def calcular_diseno(instrumento, nota, octava, escala,
         largo_cm=L_fis * 100.0,
         tapon_cm=(d_emb * 100.0) if instrumento != "quena" else 0.0,
         agujeros=agujeros, avisos=avisos, trasero=trasero,
+        modelo=("Calibrado (quena real)" if (calibrado and instrumento == "quena")
+                else "Teórico (Benade)"),
         material=material,
         material_nota=MATERIALES.get(material, ((0, 0), ""))[1],
         pared_sugerida=(pared_min, pared_max),
@@ -208,6 +238,7 @@ def plano_texto(d):
     s += "=" * 64 + "\n"
     s += f"Ø interno {d['dia']} mm | pared {d['pared']} mm | {d['temp']}°C "
     s += f"(v={d['v']:.1f} m/s)\n"
+    s += f"Modelo: {d['modelo']}\n"
     s += f"Largo de la boca al final: {d['largo_cm']:.2f} cm "
     s += "(corta 1-2 cm más largo)\n"
     if d["instrumento"] != "quena":
@@ -310,10 +341,11 @@ class App(tk.Tk):
         self.v_holes = [tk.StringVar() for _ in range(6)]
         self.v_trasero = tk.BooleanVar(value=True)
         self.v_dia_tras = tk.StringVar(value="5.5")
+        self.v_calibrado = tk.BooleanVar(value=True)
         # recálculo en vivo
         for var in ([self.v_nota, self.v_oct, self.v_escala, self.v_dia,
                      self.v_pared, self.v_temp, self.v_material,
-                     self.v_trasero, self.v_dia_tras] + self.v_holes):
+                     self.v_trasero, self.v_dia_tras, self.v_calibrado] + self.v_holes):
             var.trace_add("write", lambda *_: self._recalcular())
 
     # ---- layout ----
@@ -390,6 +422,16 @@ class App(tk.Tk):
         ttk.Combobox(p, textvariable=self.v_material, state="readonly",
                      values=list(MATERIALES.keys()), width=24).pack(
                      anchor="w", padx=14, pady=(0, 8))
+
+        cal = tk.Frame(p, bg=COL["card"]); cal.pack(fill="x", padx=14, pady=(0, 4))
+        tk.Checkbutton(cal, text="Modelo calibrado con quena real",
+                       variable=self.v_calibrado, bg=COL["card"], fg=COL["teal"],
+                       activebackground=COL["card"], font=("Georgia", 10, "bold"),
+                       selectcolor=COL["field"], anchor="w").pack(side="left")
+        tk.Label(p, text="Recomendado para quena. Usa medidas reales en vez del "
+                 "modelo teórico (que sale ~16% largo).",
+                 font=("Georgia", 8, "italic"), bg=COL["card"], fg=COL["soft"],
+                 wraplength=300, justify="left").pack(anchor="w", padx=14, pady=(0, 6))
 
         self._campo(p, "Ø de cada agujero (mm) · de la boca a la punta")
         grid = tk.Frame(p, bg=COL["card"]); grid.pack(padx=14, pady=(2, 6))
@@ -575,7 +617,7 @@ class App(tk.Tk):
                 int(self.v_oct.get()), self.v_escala.get(),
                 float(self.v_dia.get()), float(self.v_pared.get()),
                 holes, float(self.v_temp.get()), self.v_material.get(),
-                trasero, dia_tras)
+                trasero, dia_tras, bool(self.v_calibrado.get()))
         except (ValueError, ZeroDivisionError):
             return None
 
@@ -585,7 +627,8 @@ class App(tk.Tk):
             return
         self.ultimo = d
         self.lbl_res_title.config(
-            text=f"{d['instrumento'].upper()} en {d['nota_base']} {d['escala']}")
+            text=f"{d['instrumento'].upper()} en {d['nota_base']} {d['escala']}"
+                 f"   ·   {d['modelo']}")
         self.lbl_largo.config(text=f"{d['largo_cm']:.2f} cm")
         self.lbl_base.config(text=d["nota_base"], font=("Georgia", 16, "bold"))
         self.lbl_vsum.config(text=f"{d['v']:.0f} m/s", font=("Georgia", 16, "bold"))
