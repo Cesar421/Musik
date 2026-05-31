@@ -31,15 +31,18 @@ EMBOCADURA = {"quena": 0.1, "pincuyo": 1.5, "traversa": 2.3}
 
 PRESETS = {
     "quena":    dict(nota="Sol", oct=4, dia=18.0, pared=3.0,
-                     holes=[8, 8, 7.5, 7, 7, 6.5], material="Bambú / caña"),
+                     holes=[8, 7, 7.5, 8, 7.5, 8], material="Bambú / caña",
+                     trasero=True, dia_tras=5.5),
     "pincuyo":  dict(nota="Re", oct=5, dia=16.0, pared=2.0,
-                     holes=[6, 6, 6, 5.5, 5.5, 5.5], material="Bambú / caña"),
+                     holes=[5.5, 6, 6, 6, 6, 5.5], material="Bambú / caña",
+                     trasero=False, dia_tras=5.0),
     "traversa": dict(nota="Re", oct=4, dia=19.0, pared=3.0,
-                     holes=[7, 7, 7, 6.5, 6.5, 6], material="Madera dura"),
+                     holes=[6, 6.5, 7, 7, 6.5, 6], material="Madera dura",
+                     trasero=False, dia_tras=5.0),
 }
 
 # Rango recomendado de Ø de los agujeros de digitación (mm) por instrumento
-RANGO_AGUJEROS = {"quena": (7, 10), "pincuyo": (5, 7), "traversa": (6, 9)}
+RANGO_AGUJEROS = {"quena": (7, 11), "pincuyo": (5, 7), "traversa": (6, 9)}
 
 # Materiales: (espesor de pared sugerido min-max, nota de taller)
 MATERIALES = {
@@ -67,11 +70,12 @@ def embocadura_specs(instrumento, D):
     instrumento = instrumento.lower()
     if instrumento == "quena":
         return [
-            ("Tipo", "Muesca (escotadura) en el extremo abierto por donde se sopla"),
+            ("Tipo", "Muesca (bisel/escotadura) en el extremo abierto por donde se sopla"),
             ("Forma", "U o V; filo trasero biselado 30–45° hacia afuera"),
-            ("Ancho de la muesca", f"{0.75 * D:.1f} mm  (≈ 0,75 × Ø interno)"),
-            ("Profundidad", f"{0.5 * D:.1f} mm  (≈ 0,5 × Ø interno)"),
+            ("Ancho del bisel", f"{0.62 * D:.1f} mm  (≈ 0,62 × Ø interno)"),
+            ("Largo del bisel", f"{0.55 * D:.1f} mm  (≈ 0,55 × Ø interno)"),
             ("Filo de ataque", "Borde delantero afilado y limpio: ahí se parte el aire"),
+            ("Agujero del pulgar", "En la cara trasera, pequeño (≈ 5–6 mm); ver tabla"),
         ]
     if instrumento == "pincuyo":
         return [
@@ -110,8 +114,14 @@ def frecuencia(midi_num):
 
 def calcular_diseno(instrumento, nota, octava, escala,
                     dia_interno, espesor_pared, diametros, temp_c,
-                    material="Bambú / caña"):
-    """Devuelve un dict con toda la geometría del instrumento."""
+                    material="Bambú / caña", trasero=False, dia_trasero=5.5):
+    """Devuelve un dict con toda la geometría del instrumento.
+
+    `diametros` son los 6 Ø de los agujeros FRONTALES en orden físico:
+    el [0] es el más cercano a la boca (nota más aguda) y el [5] el más
+    lejano (nota más grave sobre la base).
+    `trasero` activa el agujero del pulgar (octava), más cercano a la boca.
+    """
     instrumento = instrumento.lower()
     v = velocidad_sonido(temp_c)
     R = (dia_interno / 1000.0) / 2.0
@@ -126,36 +136,50 @@ def calcular_diseno(instrumento, nota, octava, escala,
     d_emb = EMBOCADURA[instrumento] * R
     L_fis = L_ac - d_emb - d_extremo
 
-    offsets = ESCALAS[escala]
-    crudos = []
-    for i in range(1, len(offsets)):
-        m = base_midi + offsets[i]
-        f = frecuencia(m)
-        d = diametros[i - 1]
-        r = (d / 1000.0) / 2.0
+    def posicion(midi_num, d_mm):
+        """Posición física (m) del centro de un agujero desde el Punto 0."""
+        f = frecuencia(midi_num)
+        r = (d_mm / 1000.0) / 2.0
         t_ef = t + 1.5 * r
         C_h = t_ef * ((R / r) ** 2)
-        pos = v / (2.0 * f) - C_h
-        crudos.append((m, f, d, pos))
-    crudos.sort(key=lambda x: x[3])
+        return f, v / (2.0 * f) - C_h
+
+    # Agujeros frontales en ORDEN FÍSICO (boca -> punta): grados de la escala
+    # ordenados de la nota más aguda a la más grave.
+    front_offsets = sorted(ESCALAS[escala][1:], reverse=True)  # p.ej. [11,9,7,5,4,2]
+
+    spec = []  # (etiqueta, midi, diametro, es_trasero)
+    if trasero:
+        # agujero del pulgar = octava de la base (el más agudo y cercano a la boca)
+        spec.append(("P", base_midi + 12, dia_trasero, True))
+    for k, off in enumerate(front_offsets):
+        spec.append((k + 1, base_midi + off, diametros[k], False))
+
+    # calcular posiciones y ordenar por distancia a la boca
+    calc = []
+    for etq, m, d, tras in spec:
+        f, pos = posicion(m, d)
+        calc.append((etq, m, f, d, pos, tras))
+    calc.sort(key=lambda x: x[4])
 
     agujeros, prev = [], 0.0
-    for i, (m, f, d, pos) in enumerate(crudos):
+    for i, (etq, m, f, d, pos, tras) in enumerate(calc):
         pos_cm = pos * 100.0
         tramo = pos_cm if i == 0 else pos_cm - prev * 100.0
-        agujeros.append(dict(n=i + 1, nombre=NOTAS_ES[m % 12], freq=f,
-                             diametro=d, pos_cm=pos_cm, tramo_cm=tramo))
+        agujeros.append(dict(etq=etq, nombre=NOTAS_ES[m % 12], freq=f,
+                             diametro=d, pos_cm=pos_cm, tramo_cm=tramo,
+                             trasero=tras))
         prev = pos
 
     avisos = []
     if L_fis <= 0:
         avisos.append("Ø interno demasiado grande para esa nota.")
     ant = 0.0
-    for a in agujeros:
+    for i, a in enumerate(agujeros):
         if a["pos_cm"] <= 0:
-            avisos.append(f"Agujero {a['n']} ({a['nombre']}): posición imposible.")
-        if a["n"] > 1 and a["pos_cm"] <= ant:
-            avisos.append(f"Agujeros {a['n']-1} y {a['n']} se solapan.")
+            avisos.append(f"Agujero {a['etq']} ({a['nombre']}): posición imposible.")
+        if i > 0 and a["pos_cm"] <= ant:
+            avisos.append(f"Los agujeros {agujeros[i-1]['etq']} y {a['etq']} se solapan.")
         ant = a["pos_cm"]
     if agujeros and agujeros[-1]["pos_cm"] >= L_fis * 100.0:
         avisos.append("El último agujero cae fuera del tubo.")
@@ -170,7 +194,7 @@ def calcular_diseno(instrumento, nota, octava, escala,
         temp=temp_c, v=v, f_base=f_base,
         largo_cm=L_fis * 100.0,
         tapon_cm=(d_emb * 100.0) if instrumento != "quena" else 0.0,
-        agujeros=agujeros, avisos=avisos,
+        agujeros=agujeros, avisos=avisos, trasero=trasero,
         material=material,
         material_nota=MATERIALES.get(material, ((0, 0), ""))[1],
         pared_sugerida=(pared_min, pared_max),
@@ -191,8 +215,9 @@ def plano_texto(d):
     s += "-" * 64 + "\n"
     s += f"{'Aguj':<5}{'Nota':<6}{'Frec':>9}{'Ø mm':>7}{'Boca cm':>10}{'Tramo':>9}\n"
     for a in d["agujeros"]:
-        s += (f"{a['n']:<5}{a['nombre']:<6}{a['freq']:>9.1f}{a['diametro']:>7.1f}"
-              f"{a['pos_cm']:>10.2f}{a['tramo_cm']:>9.2f}\n")
+        marca = " (trasero/pulgar)" if a.get("trasero") else ""
+        s += (f"{str(a['etq']):<5}{a['nombre']:<6}{a['freq']:>9.1f}{a['diametro']:>7.1f}"
+              f"{a['pos_cm']:>10.2f}{a['tramo_cm']:>9.2f}{marca}\n")
     tf = d["largo_cm"] - d["agujeros"][-1]["pos_cm"]
     s += f"{'—':<5}{'Final':<6}{d['f_base']:>9.1f}{'—':>7}{d['largo_cm']:>10.2f}{tf:>9.2f}\n"
     s += "=" * 64 + "\n"
@@ -283,9 +308,12 @@ class App(tk.Tk):
         self.v_temp = tk.StringVar(value="27")
         self.v_material = tk.StringVar(value="Bambú / caña")
         self.v_holes = [tk.StringVar() for _ in range(6)]
+        self.v_trasero = tk.BooleanVar(value=True)
+        self.v_dia_tras = tk.StringVar(value="5.5")
         # recálculo en vivo
         for var in ([self.v_nota, self.v_oct, self.v_escala, self.v_dia,
-                     self.v_pared, self.v_temp, self.v_material] + self.v_holes):
+                     self.v_pared, self.v_temp, self.v_material,
+                     self.v_trasero, self.v_dia_tras] + self.v_holes):
             var.trace_add("write", lambda *_: self._recalcular())
 
     # ---- layout ----
@@ -376,6 +404,22 @@ class App(tk.Tk):
             self.lbl_holes.append(lab)
             tk.Entry(cell, textvariable=self.v_holes[i], width=8, font=F_MONO,
                      bg=COL["field"], relief="flat").pack(padx=4, pady=(0, 3))
+
+        # --- agujero trasero (pulgar) ---
+        tras = tk.Frame(p, bg=COL["card"]); tras.pack(fill="x", padx=14, pady=(6, 2))
+        chk = tk.Checkbutton(tras, text="Agujero trasero (pulgar)",
+                             variable=self.v_trasero, bg=COL["card"], fg=COL["ink"],
+                             activebackground=COL["card"], font=("Georgia", 10),
+                             selectcolor=COL["field"], anchor="w")
+        chk.pack(side="left")
+        tk.Label(tras, text="Ø", font=("Consolas", 9), bg=COL["card"],
+                 fg=COL["soft"]).pack(side="left", padx=(8, 2))
+        tk.Entry(tras, textvariable=self.v_dia_tras, width=6, font=F_MONO,
+                 bg=COL["field"], relief="solid", bd=1).pack(side="left")
+        tk.Label(p, text="La octava aguda, en la cara trasera. Obligatorio en quena; "
+                 "opcional en pincuyo.", font=("Georgia", 8, "italic"),
+                 bg=COL["card"], fg=COL["soft"], wraplength=300,
+                 justify="left").pack(anchor="w", padx=14)
 
         ttk.Button(p, text="Guardar plano (.txt)",
                    command=self._guardar).pack(padx=14, pady=14, fill="x")
@@ -511,6 +555,8 @@ class App(tk.Tk):
         self.v_escala.set("mayor")
         self.v_dia.set(str(pr["dia"])); self.v_pared.set(str(pr["pared"]))
         self.v_material.set(pr["material"])
+        self.v_trasero.set(pr.get("trasero", False))
+        self.v_dia_tras.set(str(pr.get("dia_tras", 5.5)))
         for i, d in enumerate(pr["holes"]):
             self.v_holes[i].set(str(d))
         self._recalcular()
@@ -520,11 +566,16 @@ class App(tk.Tk):
             holes = [float(v.get()) for v in self.v_holes]
             if any(h <= 0 for h in holes):
                 return None
+            trasero = bool(self.v_trasero.get())
+            dia_tras = float(self.v_dia_tras.get()) if trasero else 5.5
+            if trasero and dia_tras <= 0:
+                return None
             return calcular_diseno(
                 self.v_instr.get(), self.v_nota.get(),
                 int(self.v_oct.get()), self.v_escala.get(),
                 float(self.v_dia.get()), float(self.v_pared.get()),
-                holes, float(self.v_temp.get()), self.v_material.get())
+                holes, float(self.v_temp.get()), self.v_material.get(),
+                trasero, dia_tras)
         except (ValueError, ZeroDivisionError):
             return None
 
@@ -540,9 +591,10 @@ class App(tk.Tk):
         self.lbl_vsum.config(text=f"{d['v']:.0f} m/s", font=("Georgia", 16, "bold"))
         self.lbl_v.config(text=f"Velocidad del sonido: {d['v']:.1f} m/s")
 
-        # etiquetas de los agujeros con su nota
-        for i, a in enumerate(d["agujeros"]):
-            self.lbl_holes[i].config(text=f"Agujero {a['n']} · {a['nombre']}")
+        # etiquetas de los 6 agujeros FRONTALES (en orden boca->punta)
+        frontales = [a for a in d["agujeros"] if not a.get("trasero")]
+        for i, a in enumerate(frontales):
+            self.lbl_holes[i].config(text=f"Agujero {a['etq']} · {a['nombre']}")
 
         # avisos
         if d["avisos"]:
@@ -552,9 +604,12 @@ class App(tk.Tk):
 
         # tabla
         self.tree.delete(*self.tree.get_children())
+        self.tree.tag_configure("tras", background="#efe2c7")
         for a in d["agujeros"]:
-            self.tree.insert("", "end", values=(
-                a["n"], a["nombre"], f"{a['freq']:.1f}", f"{a['diametro']:.1f}",
+            etq = f"{a['etq']} ↩" if a.get("trasero") else str(a["etq"])
+            tags = ("tras",) if a.get("trasero") else ()
+            self.tree.insert("", "end", tags=tags, values=(
+                etq, a["nombre"], f"{a['freq']:.1f}", f"{a['diametro']:.1f}",
                 f"{a['pos_cm']:.2f} cm", f"{a['tramo_cm']:.2f} cm"))
         tf = d["largo_cm"] - d["agujeros"][-1]["pos_cm"]
         self.tree.insert("", "end", tags=("fin",), values=(
@@ -597,67 +652,109 @@ class App(tk.Tk):
         if Lcm <= 0:
             return
 
-        # --- dimensiones que se adaptan al tamaño actual del canvas ---
-        W = max(c.winfo_width(), 480)
-        H = max(c.winfo_height(), 180)
-        padX = 64
-        tubeH = min(max(H * 0.16, 40), 80)      # alto del tubo, acotado
-        scale = (W - padX * 2) / Lcm            # px por cm (a lo largo)
-        x0 = padX
-        x1 = x0 + Lcm * scale
-        cy = H * 0.44                           # eje del tubo
-        y = cy - tubeH / 2
+        # ── dimensiones que se adaptan al canvas ──────────────────────────
+        W  = max(c.winfo_width(), 480)
+        H  = max(c.winfo_height(), 200)
+        padX  = 68
+        tubeH = min(max(H * 0.18, 44), 72)   # alto del rectángulo del tubo
+        scale = (W - padX * 2) / Lcm          # px/cm
+        x0, x1 = padX, padX + Lcm * scale
+        # centra el tubo dejando espacio arriba (etiquetas) y abajo (trasero+regla)
+        cy = H * 0.42
+        y  = cy - tubeH / 2                   # borde superior del tubo
 
-        # tapón trasero (pincuyo / traversa)
+        espacio_arr  = y - 6                  # px disponibles arriba del tubo
+        espacio_aba  = H - (y + tubeH) - 4   # px disponibles debajo
+
+        # ── tapón (pincuyo / traversa) ────────────────────────────────────
         if d["instrumento"] != "quena":
             sx = x0 - d["tapon_cm"] * scale
             c.create_rectangle(sx, y + 8, x0, y + tubeH - 8,
-                               fill=COL["ochre"], outline=COL["terra_d"])
-            c.create_text((sx + x0) / 2, y - 8, text="tapón",
+                               fill=COL["ochre"], outline=COL["terra_d"], width=1)
+            c.create_text((sx + x0) / 2, y - 10, text="tapón",
                          fill=COL["terra_d"], font=("Consolas", 8))
 
-        # cuerpo del tubo
-        c.create_rectangle(x0, y, x1, y + tubeH, fill=COL["tube"],
-                           outline=COL["ink"], width=2)
+        # ── cuerpo del tubo ───────────────────────────────────────────────
+        c.create_rectangle(x0, y, x1, y + tubeH,
+                           fill=COL["tube"], outline=COL["ink"], width=2)
         c.create_line(x0, cy, x1, cy, fill=COL["line"], dash=(4, 4))
 
-        # embocadura (Punto 0)
-        c.create_oval(x0 - 9, cy - 9, x0 + 9, cy + 9, fill=COL["terra"],
-                     outline="white", width=2)
-        c.create_text(x0, y - 14, text="0 · boca", fill=COL["terra"],
-                     font=("Consolas", 9, "bold"))
-        c.create_text(x1, y - 14, text=f"{Lcm:.1f} cm", fill=COL["ink"],
-                     font=("Consolas", 9))
+        # ── embocadura ────────────────────────────────────────────────────
+        r_emb = 8
+        c.create_oval(x0 - r_emb, cy - r_emb, x0 + r_emb, cy + r_emb,
+                     fill=COL["terra"], outline="white", width=2)
+        c.create_text(x0, y - 14, text="0 · boca",
+                     fill=COL["terra"], font=("Consolas", 9, "bold"))
+        c.create_text(x1 + 4, y - 14, text=f"{Lcm:.1f} cm",
+                     fill=COL["ink"], font=("Consolas", 9), anchor="w")
 
-        # agujeros: radio en cm (Ø/10) por la escala; acotado al alto del tubo
-        rad_max = tubeH / 2 - 5
-        for i, a in enumerate(d["agujeros"]):
-            hx = x0 + a["pos_cm"] * scale
-            rad = (a["diametro"] / 10.0) * scale / 2.0   # mm -> cm -> px
-            rad = min(max(rad, 3), rad_max)
+        # ── agujeros ──────────────────────────────────────────────────────
+        # Separamos frontales y el trasero (pulgar)
+        frontales = [a for a in d["agujeros"] if not a.get("trasero")]
+        traseros  = [a for a in d["agujeros"] if     a.get("trasero")]
+
+        rad_max = tubeH / 2 - 4
+
+        # Frontales: etiquetas alternadas arriba/abajo
+        lbl_espacio = 30           # px mínimo entre el tubo y la primera etiqueta
+        filas_arr = max(2, int(espacio_arr / 13))   # cuántas filas caben arriba
+        for fi, a in enumerate(frontales):
+            hx  = x0 + a["pos_cm"] * scale
+            rad = min(max((a["diametro"] / 10.0) * scale / 2.0, 3), rad_max)
             c.create_oval(hx - rad, cy - rad, hx + rad, cy + rad,
                          fill=COL["ink"], outline=COL["soft"], width=1)
-            # etiquetas alternadas arriba / abajo, fuera del tubo
-            up = (i % 2 == 0)
-            base = (y - 16) if up else (y + tubeH + 16)
-            ly1 = (y - 2) if up else (y + tubeH + 2)
-            c.create_line(hx, ly1, hx, base + (4 if up else -4), fill=COL["teal"])
-            c.create_text(hx, base, text=a["nombre"], fill=COL["teal"],
-                         font=("Georgia", 10, "bold"))
-            c.create_text(hx, base + (-14 if up else 14),
-                         text=f"{a['pos_cm']:.1f}", fill=COL["soft"],
-                         font=("Consolas", 8))
 
-        # regla en centímetros, anclada debajo del tubo
-        ry = min(y + tubeH + 52, H - 16)
+            up   = (fi % 2 == 0)
+            if up:
+                lbl_y  = y - lbl_espacio
+                nota_y = lbl_y - 13
+                ln_y1, ln_y2 = y - 2, lbl_y + 2
+            else:
+                lbl_y  = y + tubeH + lbl_espacio
+                nota_y = lbl_y + 13
+                ln_y1, ln_y2 = y + tubeH + 2, lbl_y - 2
+
+            c.create_line(hx, ln_y1, hx, ln_y2, fill=COL["teal"], width=1)
+            c.create_text(hx, nota_y, text=a["nombre"],
+                         fill=COL["teal"], font=("Georgia", 10, "bold"))
+            c.create_text(hx, lbl_y,  text=f"{a['pos_cm']:.1f}",
+                         fill=COL["soft"], font=("Consolas", 8))
+
+        # Trasero (pulgar): dibujado DEBAJO del tubo con color distinto
+        for a in traseros:
+            hx  = x0 + a["pos_cm"] * scale
+            rad = min(max((a["diametro"] / 10.0) * scale / 2.0, 3), rad_max)
+            # círculo con borde color tierra para distinguirlo
+            c.create_oval(hx - rad, cy - rad, hx + rad, cy + rad,
+                         fill=COL["terra_d"], outline=COL["ochre"], width=2)
+            # etiqueta siempre abajo (cara trasera)
+            lbl_y  = y + tubeH + lbl_espacio + 22
+            nota_y = lbl_y + 13
+            c.create_line(hx, y + tubeH + 2, hx, lbl_y - 2,
+                         fill=COL["terra"], dash=(3, 3), width=1)
+            c.create_text(hx, nota_y, text=f"↩ {a['nombre']}",
+                         fill=COL["terra"], font=("Georgia", 9, "bold"))
+            c.create_text(hx, lbl_y,  text=f"{a['pos_cm']:.1f}",
+                         fill=COL["soft"], font=("Consolas", 8))
+
+        # ── leyenda ───────────────────────────────────────────────────────
+        if traseros:
+            c.create_text(x0, H - 8, anchor="w",
+                         text="● frente   ● trasero/pulgar",
+                         fill=COL["soft"], font=("Consolas", 8))
+
+        # ── regla ─────────────────────────────────────────────────────────
+        ry = min(y + tubeH + 56, H - 18)
         c.create_line(x0, ry, x1, ry, fill=COL["ink"])
-        cm = 0
-        while cm <= Lcm:
-            tx = x0 + cm * scale
-            c.create_line(tx, ry - 4, tx, ry + 4, fill=COL["ink"])
-            c.create_text(tx, ry + 12, text=str(cm), fill=COL["soft"],
-                         font=("Consolas", 7))
-            cm += 5
+        cm_mark = 0
+        while cm_mark <= Lcm:
+            tx = x0 + cm_mark * scale
+            h_tick = 6 if cm_mark % 10 == 0 else 3
+            c.create_line(tx, ry - h_tick, tx, ry + h_tick, fill=COL["ink"])
+            if cm_mark % 5 == 0:
+                c.create_text(tx, ry + 14, text=str(cm_mark),
+                             fill=COL["soft"], font=("Consolas", 7))
+            cm_mark += 5
 
     def _guardar(self):
         if not self.ultimo:
