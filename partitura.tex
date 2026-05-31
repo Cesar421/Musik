@@ -1,0 +1,69 @@
+\documentclass[a4paper,12pt]{article}
+\usepackage{musixtex}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+
+% -----------------------------------------------
+% Partitura: Pequeño Vals en Do Mayor
+% -----------------------------------------------
+
+\begin{document}
+
+\begin{center}
+    {\LARGE \textbf{Pequeño Vals en Do Mayor}}\\[0.5em]
+    {\large Cesar Fernando}\\[0.3em]
+    {\small 2026}
+\end{center}
+
+\vspace{1em}
+
+\begin{music}
+\parindent12mm
+\instrumentnumber{1}
+\setname1{Piano}
+\setstaffs1{1}
+\generalmeter{\meterfrac34}
+\startextract
+
+% ---- Compás 1 ----
+\Notes \qu{e}\qu{g}\qu{i}\en
+\bar
+
+% ---- Compás 2 ----
+\Notes \hu{h}\qu{g}\en
+\bar
+
+% ---- Compás 3 ----
+\Notes \qu{g}\qu{f}\qu{e}\en
+\bar
+
+% ---- Compás 4 ----
+\Notes \hu{f}\qu{d}\en
+\bar
+
+% ---- Compás 5 ----
+\Notes \qu{e}\qu{d}\qu{c}\en
+\bar
+
+% ---- Compás 6 ----
+\Notes \qu{d}\qu{e}\qu{f}\en
+\bar
+
+% ---- Compás 7 ----
+\Notes \qu{g}\qu{h}\qu{i}\en
+\bar
+
+% ---- Compás 8 (final) ----
+\Notes \wh{g}\en
+
+\endextract
+\end{music}
+
+\vspace{1em}
+
+\noindent\textit{Nota: compilar con \texttt{pdflatex partitura.tex} (requiere el paquete \texttt{musixtex}).}
+
+\end{document}
