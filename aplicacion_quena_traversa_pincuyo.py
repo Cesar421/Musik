@@ -42,7 +42,7 @@ PRESETS = {
 }
 
 # Rango recomendado de Ø de los agujeros de digitación (mm) por instrumento
-RANGO_AGUJEROS = {"quena": (7, 11), "pincuyo": (5, 7), "traversa": (6, 9)}
+RANGO_AGUJEROS = {"quena": (7, 11), "pincuyo": (8, 13), "traversa": (6, 9)}
 
 # Materiales: (espesor de pared sugerido min-max, nota de taller)
 MATERIALES = {
@@ -91,6 +91,8 @@ def embocadura_specs(instrumento, D):
         return [
             ("Tipo", "Orificio oval en el costado, junto al extremo tapado"),
             ("Orificio de embocadura", f"Oval ≈ {0.55 * D:.1f} × {0.65 * D:.1f} mm"),
+            ("Distancia tapón → centro embocadura",
+             f"≈ {0.115 * D:.1f} mm  (≈ 0,115 × Ø interno)"),
             ("Rebaje (undercut)", "Achaflana el orificio por dentro ≈ 7° para mejor timbre"),
             ("Chimenea", "Si la pared es gruesa, rebájala a 4–5 mm bajo la boca"),
         ]
@@ -184,7 +186,6 @@ def digitaciones(d):
                 estados[j] = False
             filas.append((frontales[idx]["nombre"], estados, True))
         # todos abiertos = grado 7 (la nota más aguda de la escala)
-        sietes = frecuencia(0)  # placeholder, recalculamos abajo
         # nombre del grado 7: una nota por encima del agujero más cercano a la boca
         nombre7 = NOTAS_ES[(_midi_de_nombre(frontales[0]["nombre"]) + _paso_escala(d)) % 12]
         filas.append((nombre7, [False] * n, True))
@@ -328,7 +329,9 @@ def plano_texto(d):
     s += f"Largo de la boca al final: {d['largo_cm']:.2f} cm "
     s += "(corta 1-2 cm más largo)\n"
     if d["instrumento"] != "quena":
-        s += f"Tapón trasero: {d['tapon_cm']:.2f} cm detrás del Punto 0\n"
+        etq = ("Tapón → embocadura" if d["instrumento"] == "traversa"
+               else "Tapón trasero")
+        s += f"{etq}: {d['tapon_cm']:.2f} cm detrás del Punto 0\n"
     s += "-" * 64 + "\n"
     s += f"{'Aguj':<5}{'Nota':<6}{'Frec':>9}{'Ø mm':>7}{'Boca cm':>10}{'Tramo':>9}\n"
     for a in d["agujeros"]:
@@ -796,7 +799,9 @@ class App(tk.Tk):
         self._fila_dato(self.fab_mat, "Ø de agujeros (rango)",
                         f"{amin}–{amax} mm")
         if d["instrumento"] != "quena":
-            self._fila_dato(self.fab_mat, "Tapón trasero",
+            etq = ("Tapón → embocadura" if d["instrumento"] == "traversa"
+                   else "Tapón trasero")
+            self._fila_dato(self.fab_mat, etq,
                             f"{d['tapon_cm']:.2f} cm detrás del Punto 0")
         self.lbl_mat_nota.config(text=d.get("material_nota", ""))
 
@@ -824,25 +829,59 @@ class App(tk.Tk):
         espacio_arr  = y - 6                  # px disponibles arriba del tubo
         espacio_aba  = H - (y + tubeH) - 4   # px disponibles debajo
 
-        # ── tapón (pincuyo / traversa) ────────────────────────────────────
-        if d["instrumento"] != "quena":
-            sx = x0 - d["tapon_cm"] * scale
-            c.create_rectangle(sx, y + 8, x0, y + tubeH - 8,
-                               fill=COL["ochre"], outline=COL["terra_d"], width=1)
-            c.create_text((sx + x0) / 2, y - 10, text="tapón",
-                         fill=COL["terra_d"], font=("Consolas", 8))
+        es_traversa = (d["instrumento"] == "traversa")
+        es_pincuyo  = (d["instrumento"] == "pincuyo")
 
         # ── cuerpo del tubo ───────────────────────────────────────────────
-        c.create_rectangle(x0, y, x1, y + tubeH,
-                           fill=COL["tube"], outline=COL["ink"], width=2)
-        c.create_line(x0, cy, x1, cy, fill=COL["line"], dash=(4, 4))
+        if es_traversa:
+            # En la traversa el cuerpo se extiende a la IZQUIERDA del Punto 0
+            # hasta el tapón (extremo cerrado). La embocadura es un agujero
+            # en la cara superior del tubo, junto al tapón.
+            sx = x0 - d["tapon_cm"] * scale
+            # cuerpo completo (zona del tapón + zona sonora)
+            c.create_rectangle(sx, y, x1, y + tubeH,
+                               fill=COL["tube"], outline=COL["ink"], width=2)
+            # marca del tapón (línea vertical interior)
+            c.create_line(sx + 2, y + 2, sx + 2, y + tubeH - 2,
+                          fill=COL["terra_d"], width=3)
+            c.create_text(sx, y - 10, text="tapón", anchor="w",
+                          fill=COL["terra_d"], font=("Consolas", 8))
+            c.create_line(x0, cy, x1, cy, fill=COL["line"], dash=(4, 4))
+            # embocadura: oval en la cara superior del tubo en Punto 0
+            emb_w = max(6, min(0.65 * d["dia"] / 10.0 * scale, tubeH * 0.9))
+            emb_h = max(5, min(0.55 * d["dia"] / 10.0 * scale, tubeH * 0.7))
+            c.create_oval(x0 - emb_w / 2, y + (tubeH - emb_h) / 2,
+                          x0 + emb_w / 2, y + (tubeH + emb_h) / 2,
+                          fill=COL["terra"], outline="white", width=2)
+            c.create_text(x0, y - 14, text="0 · embocadura",
+                          fill=COL["terra"], font=("Consolas", 9, "bold"))
+            # cota: distancia tapón → centro de embocadura
+            cota_y = y + tubeH + 14
+            c.create_line(sx, cota_y, x0, cota_y, fill=COL["terra_d"],
+                          width=1, arrow="both")
+            c.create_text((sx + x0) / 2, cota_y + 10,
+                          text=f"{d['tapon_cm']:.2f} cm",
+                          fill=COL["terra_d"], font=("Consolas", 8, "bold"))
+        else:
+            # quena (muesca en el extremo) y pincuyo (fipple en el extremo):
+            # se sopla por el extremo, así que el Punto 0 está en la punta.
+            if es_pincuyo:
+                # tapón del fipple por detrás del Punto 0
+                sx = x0 - d["tapon_cm"] * scale
+                c.create_rectangle(sx, y + 8, x0, y + tubeH - 8,
+                                   fill=COL["ochre"], outline=COL["terra_d"],
+                                   width=1)
+                c.create_text((sx + x0) / 2, y - 10, text="tapón",
+                              fill=COL["terra_d"], font=("Consolas", 8))
+            c.create_rectangle(x0, y, x1, y + tubeH,
+                               fill=COL["tube"], outline=COL["ink"], width=2)
+            c.create_line(x0, cy, x1, cy, fill=COL["line"], dash=(4, 4))
+            r_emb = 8
+            c.create_oval(x0 - r_emb, cy - r_emb, x0 + r_emb, cy + r_emb,
+                          fill=COL["terra"], outline="white", width=2)
+            c.create_text(x0, y - 14, text="0 · boca",
+                          fill=COL["terra"], font=("Consolas", 9, "bold"))
 
-        # ── embocadura ────────────────────────────────────────────────────
-        r_emb = 8
-        c.create_oval(x0 - r_emb, cy - r_emb, x0 + r_emb, cy + r_emb,
-                     fill=COL["terra"], outline="white", width=2)
-        c.create_text(x0, y - 14, text="0 · boca",
-                     fill=COL["terra"], font=("Consolas", 9, "bold"))
         c.create_text(x1 + 4, y - 14, text=f"{Lcm:.1f} cm",
                      fill=COL["ink"], font=("Consolas", 9), anchor="w")
 
@@ -948,9 +987,18 @@ class App(tk.Tk):
             c.create_rectangle(x0, top, x1, bot, fill=COL["tube"],
                                outline=(COL["terra"] if es_octava else COL["ink"]),
                                width=(2 if es_octava else 1.5))
-            # muesca (boca) arriba
-            c.create_arc(x0 + 3, top - 6, x1 - 3, top + 10, start=0, extent=180,
-                        fill=COL["card"], outline=COL["ink"], width=1)
+            if d["instrumento"] == "traversa":
+                # extremo cerrado (tapón) y embocadura como agujero en el cuerpo
+                c.create_line(x0, top, x1, top, fill=COL["terra_d"], width=3)
+                emb_r = min(r * 1.1, tubo_w * 0.32)
+                c.create_oval(cx - emb_r, top + emb_r * 1.2,
+                              cx + emb_r, top + emb_r * 3.2,
+                              fill=COL["terra"], outline=COL["terra_d"], width=1.2)
+            else:
+                # muesca (boca) arriba: quena (bisel) y pincuyo (fipple)
+                c.create_arc(x0 + 3, top - 6, x1 - 3, top + 10,
+                             start=0, extent=180,
+                             fill=COL["card"], outline=COL["ink"], width=1)
             # agujeros frontales: el [0] es el de la boca (arriba)
             paso = alto / (n_holes + 2)
             for hi, tapado in enumerate(estados):
