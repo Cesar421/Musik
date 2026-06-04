@@ -9,11 +9,5 @@ Este repositorio contiene proyectos relacionados con composición, síntesis y a
 
 ## Requisitos
 
-- OpenSees
 - Python (conda environment)
 
-## Uso
-
-```bash
-OpenSees script.tcl
-```
